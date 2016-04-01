@@ -1,12 +1,10 @@
-;;; org-docview.el --- support for links to doc-view-mode buffers
+;;; org-docview.el --- Support for links to doc-view-mode buffers -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-;;   Free Software Foundation, Inc.
+;; Copyright (C) 2009-2016 Free Software Foundation, Inc.
 
 ;; Author: Jan Böcker <jan.boecker at jboecker dot de>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -46,41 +44,58 @@
 
 
 (require 'org)
+(require 'doc-view)
 
 (declare-function doc-view-goto-page "doc-view" (page))
-(declare-function doc-view-current-page "doc-view"  (&optional win))
+(declare-function image-mode-window-get "image-mode" (prop &optional winprops))
 
-(org-add-link-type "docview" 'org-docview-open)
+(org-add-link-type "docview" 'org-docview-open 'org-docview-export)
 (add-hook 'org-store-link-functions 'org-docview-store-link)
 
+(defun org-docview-export (link description format)
+  "Export a docview link from Org files."
+  (let* ((path (if (string-match "\\(.+\\)::.+" link) (match-string 1 link)
+		 link))
+         (desc (or description link)))
+    (when (stringp path)
+      (setq path (org-link-escape (expand-file-name path)))
+      (cond
+       ((eq format 'html) (format "<a href=\"%s\">%s</a>" path desc))
+       ((eq format 'latex) (format "\\href{%s}{%s}" path desc))
+       ((eq format 'ascii) (format "%s (%s)" desc path))
+       (t path)))))
+
 (defun org-docview-open (link)
-  (when (string-match "\\(.*\\)::\\([0-9]+\\)$"  link)
-    (let* ((path (match-string 1 link))
-	   (page (string-to-number (match-string 2 link))))
-      (org-open-file path 1) ;; let org-mode open the file (in-emacs = 1)
-      ;; to ensure org-link-frame-setup is respected
-      (doc-view-goto-page page)
-      )))
+  (string-match "\\(.*?\\)\\(?:::\\([0-9]+\\)\\)?$" link)
+  (let ((path (match-string 1 link))
+	(page (and (match-beginning 2)
+		   (string-to-number (match-string 2 link)))))
+    ;; Let Org mode open the file (in-emacs = 1) to ensure
+    ;; org-link-frame-setup is respected.
+    (org-open-file path 1)
+    (when page (doc-view-goto-page page))))
 
 (defun org-docview-store-link ()
-  "Store a link to a docview buffer"
+  "Store a link to a docview buffer."
   (when (eq major-mode 'doc-view-mode)
     ;; This buffer is in doc-view-mode
     (let* ((path buffer-file-name)
-	   (page (doc-view-current-page))
-	   (link (concat "docview:" path "::" (number-to-string page)))
-	   (description ""))
+	   (page (image-mode-window-get 'page))
+	   (link (concat "docview:" path "::" (number-to-string page))))
       (org-store-link-props
        :type "docview"
        :link link
        :description path))))
 
 (defun org-docview-complete-link ()
-  "Use the existing file name completion for file: links to get the file name,
-   then ask the user for the page number and append it."
+  "Use the existing file name completion for file.
+Links to get the file name, then ask the user for the page number
+and append it."
   (concat (replace-regexp-in-string "^file:" "docview:" (org-file-complete-link))
 	  "::"
 	  (read-from-minibuffer "Page:" "1")))
 
 
 (provide 'org-docview)
+
+;;; org-docview.el ends here

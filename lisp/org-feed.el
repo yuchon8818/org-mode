@@ -1,11 +1,10 @@
-;;; org-feed.el --- Add RSS feed items to Org files
+;;; org-feed.el --- Add RSS feed items to Org files  -*- lexical-binding: t; -*-
 ;;
-;; Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2016 Free Software Foundation, Inc.
 ;;
 ;; Author: Carsten Dominik <carsten at orgmode dot org>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -25,11 +24,11 @@
 ;;
 ;;; Commentary:
 ;;
-;;  This module allows to create and change entries in an Org-mode
-;;  file triggered by items in an RSS feed.  The basic functionality is
-;;  geared toward simply adding new items found in a feed as outline nodes
-;;  to an Org file.  Using hooks, arbitrary actions can be triggered for
-;;  new or changed items.
+;;  This module allows entries to be created and changed in an Org mode
+;;  file triggered by items in an RSS feed.  The basic functionality
+;;  is geared toward simply adding new items found in a feed as
+;;  outline nodes to an Org file.  Using hooks, arbitrary actions can
+;;  be triggered for new or changed items.
 ;;
 ;;  Selecting feeds and target locations
 ;;  ------------------------------------
@@ -45,7 +44,7 @@
 ;;  With this setup, the command `M-x org-feed-update-all' will
 ;;  collect new entries in the feed at the given URL and create
 ;;  entries as subheadings under the "ReQall Entries" heading in the
-;;  file "~/org-feeds.org".  Each feed should normally have its own
+;;  file "~/org/feeds.org".  Each feed should normally have its own
 ;;  heading - however see the `:drawer' parameter.
 ;;
 ;;  Besides these standard elements that need to be specified for each
@@ -78,13 +77,11 @@
 ;;  org-feed.el needs to keep track of which feed items have been handled
 ;;  before, so that they will not be handled again.  For this, org-feed.el
 ;;  stores information in a special drawer, FEEDSTATUS, under the heading
-;;  that received the input of the feed.  You should add FEEDSTATUS
-;;  to your list of drawers in the files that receive feed input:
+;;  that received the input of the feed.
 ;;
-;;       #+DRAWERS: PROPERTIES LOGBOOK FEEDSTATUS
 ;;
-;;  Acknowledgements
-;;  ----------------
+;;  Acknowledgments
+;;  ---------------
 ;;
 ;;  org-feed.el is based on ideas by Brad Bozarth who implemented a
 ;;  similar mechanism using shell and awk scripts.
@@ -99,10 +96,15 @@
 (declare-function xml-get-children "xml" (node child-name))
 (declare-function xml-get-attribute "xml" (node attribute))
 (declare-function xml-get-attribute-or-nil "xml" (node attribute))
+(declare-function xml-substitute-special "xml" (string))
+
+(declare-function org-capture-escaped-% "org-capture" ())
+(declare-function org-capture-expand-embedded-elisp "org-capture" (&optional mark))
+(declare-function org-capture-inside-embedded-elisp-p "org-capture" ())
 
 (defgroup org-feed  nil
   "Options concerning RSS feeds as inputs for Org files."
-  :tag "Org ID"
+  :tag "Org Feed"
   :group 'org)
 
 (defcustom org-feed-alist nil
@@ -112,7 +114,9 @@ to create inbox items in Org.  Each entry is a list with the following items:
 
 name         a custom name for this feed
 URL          the Feed URL
-file         the target Org file where entries should be listed
+file         the target Org file where entries should be listed, when
+             nil the target becomes the current buffer (may be an
+             indirect buffer) each time the feed update is invoked
 headline     the headline under which entries should be listed
 
 Additional arguments can be given using keyword-value pairs.  Many of these
@@ -165,10 +169,11 @@ Here are the keyword-value pair allows in `org-feed-alist'.
      When the handler is called, point will be at the feed headline.
 
 :parse-feed function
-     This function gets passed a buffer, and should return a list of entries,
-     each being a property list containing the `:guid' and `:item-full-text'
-     keys.  The default is `org-feed-parse-rss-feed'; `org-feed-parse-atom-feed'
-     is an alternative.
+     This function gets passed a buffer, and should return a list
+     of entries, each being a property list containing the
+     `:guid' and `:item-full-text' keys.  The default is
+     `org-feed-parse-rss-feed'; `org-feed-parse-atom-feed' is an
+     alternative.
 
 :parse-entry function
      This function gets passed an entry as returned by the parse-feed
@@ -178,42 +183,39 @@ Here are the keyword-value pair allows in `org-feed-alist'.
   :group 'org-feed
   :type '(repeat
 	  (list :value ("" "http://" "" "")
-	   (string :tag "Name")
-	   (string :tag "Feed URL")
-	   (file :tag "File for inbox")
-	   (string :tag "Headline for inbox")
-	   (repeat :inline t
-		   (choice
-		    (list :inline t :tag "Filter"
-			  (const :filter)
-			  (symbol :tag "Filter Function"))
-		    (list :inline t :tag "Template"
-			  (const :template)
-			  (string :tag "Template"))
-		    (list :inline t :tag "Formatter"
-			  (const :formatter)
-			  (symbol :tag "Formatter Function"))
-		    (list :inline t :tag "New items handler"
-			  (const :new-handler)
-			  (symbol :tag "Handler Function"))
-		    (list :inline t :tag "Changed items"
-			  (const :changed-handler)
-			  (symbol :tag "Handler Function"))
-                    (list :inline t :tag "Parse Feed"
-                          (const :parse-feed)
-                          (symbol :tag "Parse Feed Function"))
-                    (list :inline t :tag "Parse Entry"
-                          (const :parse-entry)
-                          (symbol :tag "Parse Entry Function"))
-		    )))))
+		(string :tag "Name")
+		(string :tag "Feed URL")
+		(file :tag "File for inbox")
+		(string :tag "Headline for inbox")
+		(repeat :inline t
+			(choice
+			 (list :inline t :tag "Filter"
+			       (const :filter)
+			       (symbol :tag "Filter Function"))
+			 (list :inline t :tag "Template"
+			       (const :template)
+			       (string :tag "Template"))
+			 (list :inline t :tag "Formatter"
+			       (const :formatter)
+			       (symbol :tag "Formatter Function"))
+			 (list :inline t :tag "New items handler"
+			       (const :new-handler)
+			       (symbol :tag "Handler Function"))
+			 (list :inline t :tag "Changed items"
+			       (const :changed-handler)
+			       (symbol :tag "Handler Function"))
+			 (list :inline t :tag "Parse Feed"
+			       (const :parse-feed)
+			       (symbol :tag "Parse Feed Function"))
+			 (list :inline t :tag "Parse Entry"
+			       (const :parse-entry)
+			       (symbol :tag "Parse Entry Function"))
+			 )))))
 
 (defcustom org-feed-drawer "FEEDSTATUS"
   "The name of the drawer for feed status information.
 Each feed may also specify its own drawer name using the `:drawer'
-parameter in `org-feed-alist'.
-Note that in order to make these drawers behave like drawers, they must
-be added to the variable `org-drawers' or configured with a #+DRAWERS
-line."
+parameter in `org-feed-alist'."
   :group 'org-feed
   :type '(string :tag "Drawer Name"))
 
@@ -224,12 +226,14 @@ Any fields from the feed item can be interpolated into the template with
 %name, for example %title, %description, %pubDate etc.  In addition, the
 following special escapes are valid as well:
 
-%h      the title, or the first line of the description
-%t      the date as a stamp, either from <pubDate> (if present), or
-        the current date.
-%T      date and time
-%u,%U   like %t,%T, but inactive time stamps
-%a      A link, from <guid> if that is a permalink, else from <link>"
+%h      The title, or the first line of the description
+%t      The date as a stamp, either from <pubDate> (if present), or
+        the current date
+%T      Date and time
+%u,%U   Like %t,%T, but inactive time stamps
+%a      A link, from <guid> if that is a permalink, else from <link>
+%(sexp) Evaluate elisp `(sexp)' and replace with the result, the simple
+        %-escapes above can be used as arguments, e.g. %(capitalize \\\"%h\\\")"
   :group 'org-feed
   :type '(string :tag "Template"))
 
@@ -250,7 +254,7 @@ of the file pointed to by the URL."
 	  (const :tag "Externally with wget" wget)
 	  (function :tag "Function")))
 
- (defcustom org-feed-before-adding-hook nil
+(defcustom org-feed-before-adding-hook nil
   "Hook that is run before adding new feed items to a file.
 You might want to commit the file in its current state to version control,
 for example."
@@ -292,7 +296,8 @@ it can be a list structured like an entry in `org-feed-alist'."
   (catch 'exit
     (let ((name (car feed))
 	  (url (nth 1 feed))
-	  (file (nth 2 feed))
+	  (file (or (nth 2 feed) (buffer-file-name (or (buffer-base-buffer)
+						       (current-buffer)))))
 	  (headline (nth 3 feed))
 	  (filter (nth 1 (memq :filter feed)))
 	  (formatter (nth 1 (memq :formatter feed)))
@@ -302,12 +307,12 @@ it can be a list structured like an entry in `org-feed-alist'."
 			org-feed-default-template))
 	  (drawer (or (nth 1 (memq :drawer feed))
 		      org-feed-drawer))
-          (parse-feed (or (nth 1 (memq :parse-feed feed))
-                          'org-feed-parse-rss-feed))
-          (parse-entry (or (nth 1 (memq :parse-entry feed))
-                           'org-feed-parse-rss-entry))
+	  (parse-feed (or (nth 1 (memq :parse-feed feed))
+			  'org-feed-parse-rss-feed))
+	  (parse-entry (or (nth 1 (memq :parse-entry feed))
+			   'org-feed-parse-rss-entry))
 	  feed-buffer inbox-pos new-formatted
-	  entries old-status status new changed guid-alist e guid olds)
+	  entries old-status status new changed guid-alist guid olds)
       (setq feed-buffer (org-feed-get-feed url))
       (unless (and feed-buffer (bufferp (get-buffer feed-buffer)))
 	(error "Cannot get feed %s" name))
@@ -321,10 +326,11 @@ it can be a list structured like an entry in `org-feed-alist'."
 	  (setq old-status (org-feed-read-previous-status inbox-pos drawer))
 	  ;; Add the "handled" status to the appropriate entries
 	  (setq entries (mapcar (lambda (e)
-				  (setq e (plist-put e :handled
-						     (nth 1 (assoc
-							     (plist-get e :guid)
-							     old-status)))))
+				  (setq e
+					(plist-put e :handled
+						   (nth 1 (assoc
+							   (plist-get e :guid)
+							   old-status)))))
 				entries))
 	  ;; Find out which entries are new and which are changed
 	  (dolist (e entries)
@@ -398,8 +404,8 @@ it can be a list structured like an entry in `org-feed-alist'."
 
 	  ;; Normalize the visibility of the inbox tree
 	  (goto-char inbox-pos)
-	  (hide-subtree)
-	  (show-children)
+	  (outline-hide-subtree)
+	  (org-show-children)
 	  (org-cycle-hide-drawers 'children)
 
 	  ;; Hooks and messages
@@ -433,7 +439,7 @@ it can be a list structured like an entry in `org-feed-alist'."
   (if (stringp feed) (setq feed (assoc feed org-feed-alist)))
   (unless feed
     (error "No such feed in `org-feed-alist"))
-  (switch-to-buffer
+  (org-pop-to-buffer-same-window
    (org-feed-update feed 'retrieve-only))
   (goto-char (point-min)))
 
@@ -448,8 +454,8 @@ Switch to that buffer, and return the position of that headline."
        nil t)
       (goto-char (match-beginning 0))
     (goto-char (point-max))
-      (insert "\n\n* " heading "\n\n")
-      (org-back-to-heading t))
+    (insert "\n\n* " heading "\n\n")
+    (org-back-to-heading t))
   (point))
 
 (defun org-feed-read-previous-status (pos drawer)
@@ -468,8 +474,7 @@ This will find DRAWER and extract the alist."
   "Write the feed STATUS to DRAWER in entry at POS."
   (save-excursion
     (goto-char pos)
-    (let ((end (save-excursion (org-end-of-subtree t t)))
-	  guid)
+    (let ((end (save-excursion (org-end-of-subtree t t))))
       (if (re-search-forward (concat "^[ \t]*:" drawer ":[ \t]*\n")
 			     end t)
 	  (progn
@@ -504,50 +509,78 @@ This will find DRAWER and extract the alist."
 ENTRY is a property list.  This function adds a `:formatted-for-org' property
 and returns the full property list.
 If that property is already present, nothing changes."
-  (if formatter
-      (funcall formatter entry)
-    (let (dlines fmt tmp indent time name
-		 v-h v-t v-T v-u v-U v-a)
-      (setq dlines (org-split-string (or (plist-get entry :description) "???")
-				     "\n")
-	    v-h (or (plist-get entry :title) (car dlines) "???")
-	    time (or (if (plist-get entry :pubDate)
-			 (org-read-date t t (plist-get entry :pubDate)))
-		     (current-time))
-	    v-t (format-time-string (org-time-stamp-format nil nil) time)
-	    v-T (format-time-string (org-time-stamp-format t   nil) time)
-	    v-u (format-time-string (org-time-stamp-format nil t)   time)
-	    v-U (format-time-string (org-time-stamp-format t   t)   time)
-	    v-a (if (setq tmp (or (and (plist-get entry :guid-permalink)
-				       (plist-get entry :guid))
-				  (plist-get entry :link)))
-		    (concat "[[" tmp "]]\n")
-		  ""))
+  (require 'org-capture)
+  (if formatter (funcall formatter entry)
+    (let* ((dlines
+            (org-split-string (or (plist-get entry :description) "???")
+                              "\n"))
+           (time (or (if (plist-get entry :pubDate)
+                         (org-read-date t t (plist-get entry :pubDate)))
+                     (current-time)))
+           (v-h (or (plist-get entry :title) (car dlines) "???"))
+           (v-t (format-time-string (org-time-stamp-format nil nil) time))
+           (v-T (format-time-string (org-time-stamp-format t   nil) time))
+           (v-u (format-time-string (org-time-stamp-format nil t)   time))
+           (v-U (format-time-string (org-time-stamp-format t   t)   time))
+           (v-a (let ((tmp (or (and (plist-get entry :guid-permalink)
+				    (plist-get entry :guid))
+			       (plist-get entry :link))))
+		  (if tmp (format "[[%s]]\n" tmp ) ""))))
       (with-temp-buffer
-	(insert template)
-	(goto-char (point-min))
-	(while (re-search-forward "%\\([a-zA-Z]+\\)" nil t)
-	  (setq name (match-string 1))
-	  (cond
-	   ((member name '("h" "t" "T" "u" "U" "a"))
-	    (replace-match (symbol-value (intern (concat "v-" name))) t t))
-	   ((setq tmp (plist-get entry (intern (concat ":" name))))
-	    (save-excursion
-	      (save-match-data
-		(beginning-of-line 1)
-		(when (looking-at (concat "^\\([ \t]*\\)%" name "[ \t]*$"))
-		  (setq tmp (org-feed-make-indented-block
-			     tmp (org-get-indentation))))))
-	    (replace-match tmp t t))))
-	(buffer-string)))))
+        (insert template)
+        (goto-char (point-min))
+
+        ;; Mark %() embedded elisp for later evaluation.
+        (org-capture-expand-embedded-elisp 'mark)
+
+        ;; Simple %-escapes.  `org-capture-escaped-%' may modify
+	;; buffer and cripple match-data.  Use markers instead.
+        (while (re-search-forward "%\\([a-zA-Z]+\\)" nil t)
+          (let ((key (match-string 1))
+		(beg (copy-marker (match-beginning 0)))
+		(end (copy-marker (match-end 0))))
+	    (unless (org-capture-escaped-%)
+	      (delete-region beg end)
+	      (set-marker beg nil)
+	      (set-marker end nil)
+	      (let ((replacement
+		     (pcase key
+		       ("h" v-h)
+		       ("t" v-t)
+		       ("T" v-T)
+		       ("u" v-u)
+		       ("U" v-U)
+		       ("a" v-a)
+		       (name
+			(let ((v (plist-get entry (intern (concat ":" name)))))
+			  (save-excursion
+			    (save-match-data
+			      (beginning-of-line)
+			      (if (looking-at
+				   (concat "^\\([ \t]*\\)%" name "[ \t]*$"))
+				  (org-feed-make-indented-block
+				   v (org-get-indentation))
+				v))))))))
+		(when replacement
+		  (insert
+		   ;; Escape string delimiters within embedded lisp.
+		   (if (org-capture-inside-embedded-elisp-p)
+		       (replace-regexp-in-string "\"" "\\\\\"" replacement)
+		     replacement)))))))
+
+        ;; %() embedded elisp
+        (org-capture-expand-embedded-elisp)
+
+        (decode-coding-string
+         (buffer-string) (detect-coding-region (point-min) (point-max) t))))))
 
 (defun org-feed-make-indented-block (s n)
   "Add indentation of N spaces to a multiline string S."
   (if (not (string-match "\n" s))
       s
     (mapconcat 'identity
-	       (org-split-string s "\n")
-	       (concat "\n" (make-string n ?\ )))))
+               (org-split-string s "\n")
+               (concat "\n" (make-string n ?\ )))))
 
 (defun org-feed-skip-http-headers (buffer)
   "Remove HTTP headers from BUFFER, and return it.
@@ -579,17 +612,19 @@ Assumes headers are indeed present!"
   "Parse BUFFER for RSS feed entries.
 Returns a list of entries, with each entry a property list,
 containing the properties `:guid' and `:item-full-text'."
-  (let (entries beg end item guid entry)
+  (require 'xml)
+  (let ((case-fold-search t)
+	entries beg end item guid entry)
     (with-current-buffer buffer
       (widen)
       (goto-char (point-min))
-      (while (re-search-forward "<item>" nil t)
+      (while (re-search-forward "<item\\>.*?>" nil t)
 	(setq beg (point)
 	      end (and (re-search-forward "</item>" nil t)
 		       (match-beginning 0)))
 	(setq item (buffer-substring beg end)
 	      guid (if (string-match "<guid\\>.*?>\\(.*?\\)</guid>" item)
-		       (org-match-string-no-properties 1 item)))
+		       (xml-substitute-special (org-match-string-no-properties 1 item))))
 	(setq entry (list :guid guid :item-full-text item))
 	(push entry entries)
 	(widen)
@@ -598,6 +633,7 @@ containing the properties `:guid' and `:item-full-text'."
 
 (defun org-feed-parse-rss-entry (entry)
   "Parse the `:item-full-text' field for xml tags and create new properties."
+  (require 'xml)
   (with-temp-buffer
     (insert (plist-get entry :item-full-text))
     (goto-char (point-min))
@@ -605,7 +641,7 @@ containing the properties `:guid' and `:item-full-text'."
 			      nil t)
       (setq entry (plist-put entry
 			     (intern (concat ":" (match-string 1)))
-			     (match-string 2))))
+			     (xml-substitute-special (match-string 2)))))
     (goto-char (point-min))
     (unless (re-search-forward "isPermaLink[ \t]*=[ \t]*\"false\"" nil t)
       (setq entry (plist-put entry :guid-permalink t))))
@@ -618,14 +654,15 @@ containing the properties `:guid' and `:item-full-text'.
 
 The `:item-full-text' property actually contains the sexp
 formatted as a string, not the original XML data."
+  (require 'xml)
   (with-current-buffer buffer
     (widen)
     (let ((feed (car (xml-parse-region (point-min) (point-max)))))
       (mapcar
        (lambda (entry)
-         (list
-          :guid (car (xml-node-children (car (xml-get-children entry 'id))))
-          :item-full-text (prin1-to-string entry)))
+	 (list
+	  :guid (car (xml-node-children (car (xml-get-children entry 'id))))
+	  :item-full-text (prin1-to-string entry)))
        (xml-get-children feed 'entry)))))
 
 (defun org-feed-parse-atom-entry (entry)
@@ -633,31 +670,43 @@ formatted as a string, not the original XML data."
   (let ((xml (car (read-from-string (plist-get entry :item-full-text)))))
     ;; Get first <link href='foo'/>.
     (setq entry (plist-put entry :link
-                           (xml-get-attribute
-                            (car (xml-get-children xml 'link))
-                            'href)))
+			   (xml-get-attribute
+			    (car (xml-get-children xml 'link))
+			    'href)))
     ;; Add <title/> as :title.
     (setq entry (plist-put entry :title
-                           (car (xml-node-children
-                                 (car (xml-get-children xml 'title))))))
+			   (xml-substitute-special
+			    (car (xml-node-children
+				  (car (xml-get-children xml 'title)))))))
     (let* ((content (car (xml-get-children xml 'content)))
-           (type (xml-get-attribute-or-nil content 'type)))
+	   (type (xml-get-attribute-or-nil content 'type)))
       (when content
-        (cond
-         ((string= type "text")
-          ;; We like plain text.
-          (setq entry (plist-put entry :description (car (xml-node-children content)))))
-         ((string= type "html")
-          ;; TODO: convert HTML to Org markup.
-          (setq entry (plist-put entry :description (car (xml-node-children content)))))
-         ((string= type "xhtml")
-          ;; TODO: convert XHTML to Org markup.
-          (setq entry (plist-put entry :description (prin1-to-string (xml-node-children content)))))
-         (t
-          (setq entry (plist-put entry :description (format "Unknown '%s' content." type)))))))
+	(cond
+	 ((string= type "text")
+	  ;; We like plain text.
+	  (setq entry (plist-put entry :description
+				 (xml-substitute-special
+				  (car (xml-node-children content))))))
+	 ((string= type "html")
+	  ;; TODO: convert HTML to Org markup.
+	  (setq entry (plist-put entry :description
+				 (xml-substitute-special
+				  (car (xml-node-children content))))))
+	 ((string= type "xhtml")
+	  ;; TODO: convert XHTML to Org markup.
+	  (setq entry (plist-put entry :description
+				 (prin1-to-string
+				  (xml-node-children content)))))
+	 (t
+	  (setq entry (plist-put entry :description
+				 (format-message
+                                  "Unknown `%s' content." type)))))))
     entry))
 
 (provide 'org-feed)
 
-;; arch-tag: 0929b557-9bc4-47f4-9633-30a12dbb5ae2
+;; Local variables:
+;; generated-autoload-file: "org-loaddefs.el"
+;; End:
+
 ;;; org-feed.el ends here

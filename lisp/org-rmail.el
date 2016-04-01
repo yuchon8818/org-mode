@@ -1,12 +1,10 @@
 ;;; org-rmail.el --- Support for links to Rmail messages from within Org-mode
 
-;; Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-;;   Free Software Foundation, Inc.
+;; Copyright (C) 2004-2016 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <carsten at orgmode dot org>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -35,9 +33,14 @@
 (require 'org)
 
 ;; Declare external functions and variables
-(declare-function rmail-show-message "rmail" (&optional n no-summary))
-(declare-function rmail-what-message "rmail" ())
-(defvar rmail-current-message)
+(declare-function rmail-show-message  "rmail" (&optional n no-summary))
+(declare-function rmail-what-message  "rmail" (&optional pos))
+(declare-function rmail-toggle-header "rmail" (&optional arg))
+(declare-function rmail               "rmail" (&optional file-name-arg))
+(declare-function rmail-widen         "rmail" ())
+(defvar rmail-current-message)  ; From rmail.el
+(defvar rmail-header-style)     ; From rmail.el
+(defvar rmail-file-name)        ; From rmail.el
 
 ;; Install the link type
 (org-add-link-type "rmail" 'org-rmail-open)
@@ -54,18 +57,21 @@
 	  (rmail-show-message rmail-current-message))
 	(when (fboundp 'rmail-narrow-to-non-pruned-header)
 	  (rmail-narrow-to-non-pruned-header))
+	(when (eq rmail-header-style 'normal)
+	  (rmail-toggle-header -1))
 	(let* ((folder buffer-file-name)
 	       (message-id (mail-fetch-field "message-id"))
 	       (from (mail-fetch-field "from"))
 	       (to (mail-fetch-field "to"))
 	       (subject (mail-fetch-field "subject"))
+	       (date (mail-fetch-field "date"))
 	       desc link)
 	  (org-store-link-props
-	   :type "rmail" :from from :to to
+	   :type "rmail" :from from :to to :date date
 	   :subject subject :message-id message-id)
 	  (setq message-id (org-remove-angle-brackets message-id))
 	  (setq desc (org-email-link-description))
-	  (setq link (org-make-link "rmail:" folder "#" message-id))
+	  (setq link (concat "rmail:" folder "#" message-id))
 	  (org-add-link-props :link link :description desc)
 	  (rmail-show-message rmail-current-message)
 	  link)))))
@@ -82,18 +88,20 @@
 (defun org-rmail-follow-link (folder article)
   "Follow an Rmail link to FOLDER and ARTICLE."
   (require 'rmail)
-  (setq article (org-add-angle-brackets article))
+  (cond ((null article) (setq article ""))
+	((stringp article)
+	 (setq article (org-add-angle-brackets article)))
+	(t (user-error "Wrong RMAIL link format")))
   (let (message-number)
     (save-excursion
       (save-window-excursion
 	(rmail (if (string= folder "RMAIL") rmail-file-name folder))
 	(setq message-number
 	      (save-restriction
-		(widen)
+		(rmail-widen)
 		(goto-char (point-max))
 		(if (re-search-backward
-		     (concat "^Message-ID:\\s-+" (regexp-quote
-						  (or article "")))
+		     (concat "^Message-ID:\\s-+" (regexp-quote article))
 		     nil t)
 		    (rmail-what-message))))))
     (if message-number
@@ -104,7 +112,5 @@
       (error "Message not found"))))
 
 (provide 'org-rmail)
-
-;; arch-tag: c6cf4a8b-6639-4b7f-821f-bdf10746b173
 
 ;;; org-rmail.el ends here

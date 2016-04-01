@@ -1,20 +1,19 @@
 ;;; org-w3m.el --- Support from copy and paste from w3m to Org-mode
 
-;; Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
 ;; Author: Andy Stewart <lazycat dot manatee at gmail dot com>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
-;; GNU Emacs is free software: you can redistribute it and/or modify
+;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
 
-;; GNU Emacs is distributed in the hope that it will be useful,
+;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
@@ -28,11 +27,11 @@
 ;; This file implements copying HTML content from a w3m buffer and
 ;; transforming the text on the fly so that it can be pasted into
 ;; an org-mode buffer with hot links.  It will also work for regions
-;; in gnus buffers that have ben washed with w3m.
+;; in gnus buffers that have been washed with w3m.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-;;; Acknowledgements:
+;;; Acknowledgments:
 
 ;; Richard Riley <rileyrgdev at googlemail dot com>
 ;;
@@ -40,8 +39,22 @@
 ;;      proposed by Richard, I'm just coding it.
 ;;
 
+;;; Code:
+
 (require 'org)
-(declare-function w3m-anchor "ext:w3m-util" (position))
+
+(defvar w3m-current-url)
+(defvar w3m-current-title)
+
+(add-hook 'org-store-link-functions 'org-w3m-store-link)
+(defun org-w3m-store-link ()
+  "Store a link to a w3m buffer."
+  (when (eq major-mode 'w3m-mode)
+    (org-store-link-props
+     :type "w3m"
+     :link w3m-current-url
+     :url (url-view-url t)
+     :description (or w3m-current-title w3m-current-url))))
 
 (defun org-w3m-copy-for-org-mode ()
   "Copy current buffer content or active region with `org-mode' style links.
@@ -68,7 +81,7 @@ so that it can be yanked into an Org-mode buffer with links working correctly."
         ;; store current point before jump next anchor
         (setq temp-position (point))
         ;; move to next anchor when current point is not at anchor
-        (or (w3m-anchor (point)) (org-w3m-get-next-link-start))
+        (or (get-text-property (point) 'w3m-href-anchor) (org-w3m-get-next-link-start))
         (if (<= (point) transform-end)  ; if point is inside transform bound
             (progn
               ;; get content between two links.
@@ -77,7 +90,7 @@ so that it can be yanked into an Org-mode buffer with links working correctly."
                                                (buffer-substring
                                                 temp-position (point)))))
               ;; get link location at current point.
-              (setq link-location (w3m-anchor (point)))
+              (setq link-location (get-text-property (point) 'w3m-href-anchor))
               ;; get link title at current point.
               (setq link-title (buffer-substring (point)
                                                  (org-w3m-get-anchor-end)))
@@ -115,7 +128,7 @@ so that it can be yanked into an Org-mode buffer with links working correctly."
     (while (next-single-property-change (point) 'w3m-anchor-sequence)
       ;; jump to next anchor
       (goto-char (next-single-property-change (point) 'w3m-anchor-sequence))
-      (when (w3m-anchor (point))
+      (when (get-text-property (point) 'w3m-href-anchor)
         ;; return point when current is valid link
         (throw 'reach nil))))
   (point))
@@ -126,7 +139,7 @@ so that it can be yanked into an Org-mode buffer with links working correctly."
     (while (previous-single-property-change (point) 'w3m-anchor-sequence)
       ;; jump to previous anchor
       (goto-char (previous-single-property-change (point) 'w3m-anchor-sequence))
-      (when (w3m-anchor (point))
+      (when (get-text-property (point) 'w3m-href-anchor)
         ;; return point when current is valid link
         (throw 'reach nil))))
   (point))
@@ -166,7 +179,5 @@ Return t if there is no previous link; otherwise, return nil."
    (define-key w3m-minor-mode-map "\C-c\C-x\C-w" 'org-w3m-copy-for-org-mode)))
 
 (provide 'org-w3m)
-
-;; arch-tag: 851d7447-488d-49f0-a14d-46c092e84352
 
 ;;; org-w3m.el ends here

@@ -1,11 +1,10 @@
 ;;; org-plot.el --- Support for plotting from Org-mode
 
-;; Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2016 Free Software Foundation, Inc.
 ;;
 ;; Author: Eric Schulte <schulte dot eric at gmail dot com>
 ;; Keywords: tables, plotting
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -31,7 +30,6 @@
 
 ;;; Code:
 (require 'org)
-(require 'org-exp)
 (require 'org-table)
 (eval-when-compile
   (require 'cl))
@@ -44,7 +42,7 @@
   '((:plot-type . 2d)
     (:with . lines)
     (:ind . 0))
-  "Default options to gnuplot used by `org-plot/gnuplot'")
+  "Default options to gnuplot used by `org-plot/gnuplot'.")
 
 (defvar org-plot-timestamp-fmt nil)
 
@@ -96,7 +94,7 @@ Return value is the point at the beginning of the table."
   (goto-char (org-table-begin)))
 
 (defun org-plot/collect-options (&optional params)
-  "Collect options from an org-plot '#+Plot:' line.
+  "Collect options from an org-plot `#+Plot:' line.
 Accepts an optional property list PARAMS, to which the options
 will be added.  Returns the resulting property list."
   (interactive)
@@ -121,10 +119,9 @@ will be added.  Returns the resulting property list."
 Pass PARAMS through to `orgtbl-to-generic' when exporting TABLE."
   (with-temp-file
       data-file
-    (make-local-variable 'org-plot-timestamp-fmt)
-    (setq org-plot-timestamp-fmt (or
-				  (plist-get params :timefmt)
-				  "%Y-%m-%d-%H:%M:%S"))
+    (setq-local org-plot-timestamp-fmt (or
+					(plist-get params :timefmt)
+					"%Y-%m-%d-%H:%M:%S"))
     (insert (orgtbl-to-generic
 	     table
 	     (org-combine-plists
@@ -145,7 +142,8 @@ and dependant variables."
 		   (dotimes (col (length (first table)))
 		     (setf collector (cons col collector)))
 		   collector)))
-	 row-vals (counter 0))
+	 (counter 0)
+	 row-vals)
     (when (>= ind 0) ;; collect values of ind col
       (setf row-vals (mapcar (lambda (row) (setf counter (+ 1 counter))
 			       (cons counter (nth ind row))) table)))
@@ -160,26 +158,26 @@ and dependant variables."
     ;; write table to gnuplot grid datafile format
     (with-temp-file data-file
       (let ((num-rows (length table)) (num-cols (length (first table)))
+	    (gnuplot-row (lambda (col row value)
+			   (setf col (+ 1 col)) (setf row (+ 1 row))
+			   (format "%f  %f  %f\n%f  %f  %f\n"
+				   col (- row 0.5) value ;; lower edge
+				   col (+ row 0.5) value))) ;; upper edge
 	    front-edge back-edge)
-	(flet ((gnuplot-row (col row value)
-			    (setf col (+ 1 col)) (setf row (+ 1 row))
-			    (format "%f  %f  %f\n%f  %f  %f\n"
-				    col (- row 0.5) value ;; lower edge
-				    col (+ row 0.5) value))) ;; upper edge
-	  (dotimes (col num-cols)
-	    (dotimes (row num-rows)
-	      (setf back-edge
-		    (concat back-edge
-			    (gnuplot-row (- col 1) row (string-to-number
-							(nth col (nth row table))))))
-	      (setf front-edge
-		    (concat front-edge
-			    (gnuplot-row col row (string-to-number
-						  (nth col (nth row table)))))))
-	    ;; only insert once per row
-	    (insert back-edge) (insert "\n") ;; back edge
-	    (insert front-edge) (insert "\n") ;; front edge
-	    (setf back-edge "") (setf front-edge "")))))
+	(dotimes (col num-cols)
+	  (dotimes (row num-rows)
+	    (setf back-edge
+		  (concat back-edge
+			  (funcall gnuplot-row (- col 1) row
+				   (string-to-number (nth col (nth row table))))))
+	    (setf front-edge
+		  (concat front-edge
+			  (funcall gnuplot-row col row
+				   (string-to-number (nth col (nth row table)))))))
+	  ;; only insert once per row
+	  (insert back-edge) (insert "\n") ;; back edge
+	  (insert front-edge) (insert "\n") ;; front edge
+	  (setf back-edge "") (setf front-edge ""))))
     row-vals))
 
 (defun org-plot/gnuplot-script (data-file num-cols params &optional preface)
@@ -188,9 +186,7 @@ NUM-COLS controls the number of columns plotted in a 2-d plot.
 Optional argument PREFACE returns only option parameters in a
 manner suitable for prepending to a user-specified script."
   (let* ((type (plist-get params :plot-type))
-	 (with (if (equal type 'grid)
-		   'pm3d
-		 (plist-get params :with)))
+	 (with (if (eq type 'grid) 'pm3d (plist-get params :with)))
 	 (sets (plist-get params :set))
 	 (lines (plist-get params :line))
 	 (map (plist-get params :map))
@@ -209,129 +205,132 @@ manner suitable for prepending to a user-specified script."
 		     ('2d "plot")
 		     ('3d "splot")
 		     ('grid "splot")))
-	 (script "reset") plot-lines)
-    (flet ((add-to-script (line) (setf script (format "%s\n%s" script line))))
-      (when file ;; output file
-	(add-to-script (format "set term %s" (file-name-extension file)))
-	(add-to-script (format "set output '%s'" file)))
-      (case type ;; type
-	('2d ())
-	('3d (if map (add-to-script "set map")))
-	('grid (if map
-		   (add-to-script "set pm3d map")
-		 (add-to-script "set pm3d"))))
-      (when title (add-to-script (format "set title '%s'" title))) ;; title
-      (when lines (mapc (lambda (el) (add-to-script el)) lines)) ;; line
-      (when sets ;; set
-	(mapc (lambda (el) (add-to-script (format "set %s" el))) sets))
-      (when x-labels ;; x labels (xtics)
-	(add-to-script
-	 (format "set xtics (%s)"
-		 (mapconcat (lambda (pair)
-			      (format "\"%s\" %d" (cdr pair) (car pair)))
-			    x-labels ", "))))
-      (when y-labels ;; y labels (ytics)
-	(add-to-script
-	 (format "set ytics (%s)"
-		 (mapconcat (lambda (pair)
-			      (format "\"%s\" %d" (cdr pair) (car pair)))
-			    y-labels ", "))))
-      (when time-ind ;; timestamp index
-	(add-to-script "set xdata time")
-	(add-to-script (concat "set timefmt \""
-			       (or timefmt ;; timefmt passed to gnuplot
-				   "%Y-%m-%d-%H:%M:%S") "\"")))
-      (unless preface
-        (case type ;; plot command
-	('2d (dotimes (col num-cols)
-	       (unless (and (equal type '2d)
-			    (or (and ind (equal (+ 1 col) ind))
-				(and deps (not (member (+ 1 col) deps)))))
-		 (setf plot-lines
-		       (cons
-			(format plot-str data-file
-				(or (and ind (> ind 0)
-                                         (not text-ind)
-                                         (format "%d:" ind)) "")
-				(+ 1 col)
-				(if text-ind (format ":xticlabel(%d)" ind) "")
-				with
-				(or (nth col col-labels) (format "%d" (+ 1 col))))
-			plot-lines)))))
-	('3d
+	 (script "reset")
+	 ;; ats = add-to-script
+	 (ats (lambda (line) (setf script (concat script "\n" line))))
+	 plot-lines)
+    (when file				; output file
+      (funcall ats (format "set term %s" (file-name-extension file)))
+      (funcall ats (format "set output '%s'" file)))
+    (case type				; type
+      (2d ())
+      (3d (when map (funcall ats "set map")))
+      (grid (if map (funcall ats "set pm3d map") (funcall ats "set pm3d"))))
+    (when title (funcall ats (format "set title '%s'" title))) ; title
+    (mapc ats lines)					       ; line
+    (dolist (el sets) (funcall ats (format "set %s" el)))      ; set
+    ;; Unless specified otherwise, values are TAB separated.
+    (unless (org-string-match-p "^set datafile separator" script)
+      (funcall ats "set datafile separator \"\\t\""))
+    (when x-labels			; x labels (xtics)
+      (funcall ats
+	       (format "set xtics (%s)"
+		       (mapconcat (lambda (pair)
+				    (format "\"%s\" %d" (cdr pair) (car pair)))
+				  x-labels ", "))))
+    (when y-labels			; y labels (ytics)
+      (funcall ats
+	       (format "set ytics (%s)"
+		       (mapconcat (lambda (pair)
+				    (format "\"%s\" %d" (cdr pair) (car pair)))
+				  y-labels ", "))))
+    (when time-ind			; timestamp index
+      (funcall ats "set xdata time")
+      (funcall ats (concat "set timefmt \""
+			   (or timefmt	; timefmt passed to gnuplot
+			       "%Y-%m-%d-%H:%M:%S") "\"")))
+    (unless preface
+      (case type			; plot command
+	(2d (dotimes (col num-cols)
+	      (unless (and (eq type '2d)
+			   (or (and ind (equal (1+ col) ind))
+			       (and deps (not (member (1+ col) deps)))))
+		(setf plot-lines
+		      (cons
+		       (format plot-str data-file
+			       (or (and ind (> ind 0)
+					(not text-ind)
+					(format "%d:" ind)) "")
+			       (1+ col)
+			       (if text-ind (format ":xticlabel(%d)" ind) "")
+			       with
+			       (or (nth col col-labels) (format "%d" (1+ col))))
+		       plot-lines)))))
+	(3d
 	 (setq plot-lines (list (format "'%s' matrix with %s title ''"
 					data-file with))))
-	('grid
+	(grid
 	 (setq plot-lines (list (format "'%s' with %s title ''"
 					data-file with)))))
-        (add-to-script
-         (concat plot-cmd " " (mapconcat 'identity (reverse plot-lines) ",\\\n    "))))
-      script)))
+      (funcall ats
+	       (concat plot-cmd " " (mapconcat #'identity
+					       (reverse plot-lines)
+					       ",\\\n    "))))
+    script))
 
 ;;-----------------------------------------------------------------------------
 ;; facade functions
 ;;;###autoload
 (defun org-plot/gnuplot (&optional params)
-  "Plot table using gnuplot. Gnuplot options can be specified with PARAMS.
+  "Plot table using gnuplot.  Gnuplot options can be specified with PARAMS.
 If not given options will be taken from the +PLOT
 line directly before or after the table."
   (interactive)
   (require 'gnuplot)
   (save-window-excursion
     (delete-other-windows)
-    (when (get-buffer "*gnuplot*") ;; reset *gnuplot* if it already running
+    (when (get-buffer "*gnuplot*") ; reset *gnuplot* if it already running
       (with-current-buffer "*gnuplot*"
-	(goto-char (point-max))
-	(gnuplot-delchar-or-maybe-eof nil)))
+	(goto-char (point-max))))
     (org-plot/goto-nearest-table)
-    ;; set default options
-    (mapc
-     (lambda (pair)
-       (unless (plist-member params (car pair))
-	 (setf params (plist-put params (car pair) (cdr pair)))))
-     org-plot/gnuplot-default-options)
+    ;; Set default options.
+    (dolist (pair org-plot/gnuplot-default-options)
+      (unless (plist-member params (car pair))
+	(setf params (plist-put params (car pair) (cdr pair)))))
     ;; collect table and table information
     (let* ((data-file (make-temp-file "org-plot"))
 	   (table (org-table-to-lisp))
 	   (num-cols (length (if (eq (first table) 'hline) (second table)
 			       (first table)))))
-      (while (equal 'hline (first table)) (setf table (cdr table)))
-      (when (equal (second table) 'hline)
-	(setf params (plist-put params :labels (first table))) ;; headers to labels
-	(setf table (delq 'hline (cdr table)))) ;; clean non-data from table
-      ;; collect options
+      (run-with-idle-timer 0.1 nil #'delete-file data-file)
+      (while (eq 'hline (car table)) (setf table (cdr table)))
+      (when (eq (cadr table) 'hline)
+	(setf params (plist-put params :labels (first table))) ; headers to labels
+	(setf table (delq 'hline (cdr table)))) ; clean non-data from table
+      ;; Collect options.
       (save-excursion (while (and (equal 0 (forward-line -1))
 				  (looking-at "[[:space:]]*#\\+"))
 			(setf params (org-plot/collect-options params))))
-      ;; dump table to datafile (very different for grid)
+      ;; Dump table to datafile (very different for grid).
       (case (plist-get params :plot-type)
-	('2d   (org-plot/gnuplot-to-data table data-file params))
-	('3d   (org-plot/gnuplot-to-data table data-file params))
-	('grid (let ((y-labels (org-plot/gnuplot-to-grid-data
-				table data-file params)))
-		 (when y-labels (plist-put params :ylabels y-labels)))))
-      ;; check for timestamp ind column
-      (let ((ind (- (plist-get params :ind) 1)))
-	(when (and (>= ind 0) (equal '2d (plist-get params :plot-type)))
+	(2d   (org-plot/gnuplot-to-data table data-file params))
+	(3d   (org-plot/gnuplot-to-data table data-file params))
+	(grid (let ((y-labels (org-plot/gnuplot-to-grid-data
+			       table data-file params)))
+		(when y-labels (plist-put params :ylabels y-labels)))))
+      ;; Check for timestamp ind column.
+      (let ((ind (1- (plist-get params :ind))))
+	(when (and (>= ind 0) (eq '2d (plist-get params :plot-type)))
 	  (if (= (length
 		  (delq 0 (mapcar
 			   (lambda (el)
-			     (if (string-match org-ts-regexp3 el)
-				 0 1))
-			   (mapcar (lambda (row) (nth ind row)) table)))) 0)
+			     (if (string-match org-ts-regexp3 el) 0 1))
+			   (mapcar (lambda (row) (nth ind row)) table))))
+		 0)
 	      (plist-put params :timeind t)
-	    ;; check for text ind column
+	    ;; Check for text ind column.
 	    (if (or (string= (plist-get params :with) "hist")
 		    (> (length
 			(delq 0 (mapcar
 				 (lambda (el)
 				   (if (string-match org-table-number-regexp el)
 				       0 1))
-				 (mapcar (lambda (row) (nth ind row)) table)))) 0))
+				 (mapcar (lambda (row) (nth ind row)) table))))
+		       0))
 		(plist-put params :textind t)))))
-      ;; write script
+      ;; Write script.
       (with-temp-buffer
-	(if (plist-get params :script) ;; user script
+	(if (plist-get params :script)	; user script
 	    (progn (insert
                     (org-plot/gnuplot-script data-file num-cols params t))
                    (insert "\n")
@@ -339,16 +338,17 @@ line directly before or after the table."
                    (goto-char (point-min))
                    (while (re-search-forward "$datafile" nil t)
                      (replace-match data-file nil nil)))
-	  (insert
-	   (org-plot/gnuplot-script data-file num-cols params)))
-	;; graph table
+	  (insert (org-plot/gnuplot-script data-file num-cols params)))
+	;; Graph table.
 	(gnuplot-mode)
 	(gnuplot-send-buffer-to-gnuplot))
-      ;; cleanup
-      (bury-buffer (get-buffer "*gnuplot*"))
-      (run-with-idle-timer 0.1 nil (lambda () (delete-file data-file))))))
+      ;; Cleanup.
+      (bury-buffer (get-buffer "*gnuplot*")))))
 
 (provide 'org-plot)
 
-;; arch-tag: 5763f7c6-0c75-416d-b070-398ee4ec0eca
+;; Local variables:
+;; generated-autoload-file: "org-loaddefs.el"
+;; End:
+
 ;;; org-plot.el ends here

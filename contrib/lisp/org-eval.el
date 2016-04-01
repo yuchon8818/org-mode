@@ -1,5 +1,5 @@
 ;;; org-eval.el --- Display result of evaluating code in various languages
-;; Copyright (C) 2008 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2016 Free Software Foundation, Inc.
 ;;
 ;; Author: Carsten Dominik <carsten at orgmode dot org>
 ;; Keywords: outlines, hypermedia, calendar, wp
@@ -8,20 +8,18 @@
 ;;
 ;; This file is not yet part of GNU Emacs.
 ;;
-;; GNU Emacs is free software; you can redistribute it and/or modify
+;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation; either version 3, or (at your option)
 ;; any later version.
 
-;; GNU Emacs is distributed in the hope that it will be useful,
+;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with GNU Emacs; see the file COPYING.  If not, write to the
-;; Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
-;; Boston, MA 02110-1301, USA.
+;; along with GNU Emacs.  If not, see <http://www.gnu.org/licenses/>.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;;; Commentary:
@@ -88,8 +86,7 @@
        (:foreground "yellow"))))
   "Face for command output that is included into an Org-mode buffer."
   :group 'org-eval
-  :group 'org-faces
-  :version "22.1")
+  :group 'org-faces)
 
 (defvar org-eval-regexp nil)
 
@@ -105,7 +102,7 @@
 (defcustom org-eval-interpreters '("lisp")
   "Interpreters allows for evaluation tags.
 This is a list of program names (as strings) that can evaluate code and
-insert the output into an Org-mode buffer.  Valid choices are 
+insert the output into an Org-mode buffer.  Valid choices are
 
 lisp    Interpret Emacs Lisp code and display the result
 shell   Pass command to the shell and display the result
@@ -120,7 +117,7 @@ ruby    The ruby interpreter"
 	      (const "python")
 	      (const "ruby")
 	      (const "shell")))
-  
+
 (defun org-eval-handle-snippets (limit &optional replace)
   "Evaluate code snippets and display the results as display property.
 When REPLACE is non-nil, replace the code region with the result (used
@@ -212,9 +209,8 @@ This should go into the `org-export-preprocess-hook'."
   (with-temp-buffer
     (insert code)
     (shell-command-on-region (point-min) (point-max) cmd nil 'replace)
-    (buffer-string)))  
+    (buffer-string)))
 
 (provide 'org-eval)
 
 ;;; org-eval.el ends here
-

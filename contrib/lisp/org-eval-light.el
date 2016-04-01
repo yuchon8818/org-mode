@@ -1,6 +1,6 @@
 ;;; org-eval-light.el --- Display result of evaluating code in various languages (light)
 
-;; Copyright (C) 2008 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <carsten at orgmode dot org>,
 ;;         Eric Schulte <schulte dot eric at gmail dot com>
@@ -11,20 +11,18 @@
 
 ;; This file is not yet part of GNU Emacs.
 
-;; GNU Emacs is free software; you can redistribute it and/or modify
+;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation; either version 3, or (at your option)
 ;; any later version.
 
-;; GNU Emacs is distributed in the hope that it will be useful,
+;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with GNU Emacs; see the file COPYING.  If not, write to the
-;; Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
-;; Boston, MA 02110-1301, USA.
+;; along with GNU Emacs.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -67,7 +65,7 @@ large example block")
 (defcustom org-eval-light-interpreters '("lisp" "emacs-lisp" "ruby" "shell")
   "Interpreters allows for evaluation tags.
 This is a list of program names (as strings) that can evaluate code and
-insert the output into an Org-mode buffer.  Valid choices are 
+insert the output into an Org-mode buffer.  Valid choices are
 
 lisp    Interpret Emacs Lisp code and display the result
 shell   Pass command to the shell and display the result
@@ -189,7 +187,7 @@ commented by `org-eval-light-make-region-example'."
   (with-temp-buffer
     (insert code)
     (shell-command-on-region (point-min) (point-max) cmd nil 'replace)
-    (buffer-string)))  
+    (buffer-string)))
 
 (defadvice org-ctrl-c-ctrl-c (around org-cc-eval-source activate)
   (if (org-eval-light-inside-snippet)
@@ -197,4 +195,5 @@ commented by `org-eval-light-make-region-example'."
     ad-do-it))
 
 (provide 'org-eval-light)
+
 ;;; org-eval-light.el ends here

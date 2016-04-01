@@ -1,11 +1,10 @@
-;;; org-habit.el --- The habit tracking code for Org-mode
+;;; org-habit.el --- The habit tracking code for Org -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2016 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw at gnu dot org>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -27,8 +26,11 @@
 
 ;; This file contains the habit tracking code for Org-mode
 
+;;; Code:
+
 (require 'org)
 (require 'org-agenda)
+
 (eval-when-compile
   (require 'cl))
 
@@ -62,6 +64,30 @@ Note that consistency graphs will overwrite anything else in the buffer."
   "If non-nil, only show habits on today's agenda, and not for future days.
 Note that even when shown for future days, the graph is always
 relative to the current effective date."
+  :group 'org-habit
+  :type 'boolean)
+
+(defcustom org-habit-show-all-today nil
+  "If non-nil, will show the consistency graph of all habits on
+today's agenda, even if they are not scheduled."
+  :group 'org-habit
+  :type 'boolean)
+
+(defcustom org-habit-today-glyph ?!
+  "Glyph character used to identify today."
+  :group 'org-habit
+  :version "24.1"
+  :type 'character)
+
+(defcustom org-habit-completed-glyph ?*
+  "Glyph character used to show completed days on which a task was done."
+  :group 'org-habit
+  :version "24.1"
+  :type 'character)
+
+(defcustom org-habit-show-done-always-green nil
+  "Non-nil means DONE days will always be green in the consistency graph.
+It will be green even if it was done after the deadline."
   :group 'org-habit
   :type 'boolean)
 
@@ -139,6 +165,7 @@ Returns a list with the following elements:
   2: Optional deadline (nil if not present)
   3: If deadline, the repeater for the deadline, otherwise nil
   4: A list of all the past dates this todo was mark closed
+  5: Repeater type as a string
 
 This list represents a \"habit\" for the rest of this module."
   (save-excursion
@@ -146,15 +173,19 @@ This list represents a \"habit\" for the rest of this module."
     (assert (org-is-habit-p (point)))
     (let* ((scheduled (org-get-scheduled-time (point)))
 	   (scheduled-repeat (org-get-repeat org-scheduled-string))
-	   (sr-days (org-habit-duration-to-days scheduled-repeat))
 	   (end (org-entry-end-position))
-	   (habit-entry (org-no-properties (nth 5 (org-heading-components))))
-	   closed-dates deadline dr-days)
+	   (habit-entry (org-no-properties (nth 4 (org-heading-components))))
+	   closed-dates deadline dr-days sr-days sr-type)
       (if scheduled
 	  (setq scheduled (time-to-days scheduled))
 	(error "Habit %s has no scheduled date" habit-entry))
       (unless scheduled-repeat
-	(error "Habit %s has no scheduled repeat period" habit-entry))
+	(error
+	 "Habit `%s' has no scheduled repeat period or has an incorrect one"
+	 habit-entry))
+      (setq sr-days (org-habit-duration-to-days scheduled-repeat)
+	    sr-type (progn (string-match "[\\.+]?\\+" scheduled-repeat)
+			   (org-match-string-no-properties 0 scheduled-repeat)))
       (unless (> sr-days 0)
 	(error "Habit %s scheduled repeat period is less than 1d" habit-entry))
       (when (string-match "/\\([0-9]+[dwmy]\\)" scheduled-repeat)
@@ -165,11 +196,37 @@ This list represents a \"habit\" for the rest of this module."
 		   habit-entry scheduled-repeat))
 	(setq deadline (+ scheduled (- dr-days sr-days))))
       (org-back-to-heading t)
-      (while (re-search-forward "- State \"DONE\".*\\[\\([^]]+\\)\\]" end t)
-	(push (time-to-days
-	       (org-time-string-to-time (match-string-no-properties 1)))
-	      closed-dates))
-      (list scheduled sr-days deadline dr-days closed-dates))))
+      (let* ((maxdays (+ org-habit-preceding-days org-habit-following-days))
+	     (reversed org-log-states-order-reversed)
+	     (search (if reversed 're-search-forward 're-search-backward))
+	     (limit (if reversed end (point)))
+	     (count 0)
+	     (re (format
+		  "^[ \t]*-[ \t]+\\(?:State \"%s\".*%s%s\\)"
+		  (regexp-opt org-done-keywords)
+		  org-ts-regexp-inactive
+		  (let ((value (cdr (assq 'done org-log-note-headings))))
+		    (if (not value) ""
+		      (concat "\\|"
+			      (org-replace-escapes
+			       (regexp-quote value)
+			       `(("%d" . ,org-ts-regexp-inactive)
+				 ("%D" . ,org-ts-regexp)
+				 ("%s" . "\"\\S-+\"")
+				 ("%S" . "\"\\S-+\"")
+				 ("%t" . ,org-ts-regexp-inactive)
+				 ("%T" . ,org-ts-regexp)
+				 ("%u" . ".*?")
+				 ("%U" . ".*?")))))))))
+	(unless reversed (goto-char end))
+	(while (and (< count maxdays) (funcall search re limit t))
+	  (push (time-to-days
+		 (org-time-string-to-time
+		  (or (org-match-string-no-properties 1)
+		      (org-match-string-no-properties 2))))
+		closed-dates)
+	  (setq count (1+ count))))
+      (list scheduled sr-days deadline dr-days closed-dates sr-type))))
 
 (defsubst org-habit-scheduled (habit)
   (nth 0 habit))
@@ -178,22 +235,23 @@ This list represents a \"habit\" for the rest of this module."
 (defsubst org-habit-deadline (habit)
   (let ((deadline (nth 2 habit)))
     (or deadline
-	(+ (org-habit-scheduled habit)
-	   (1- (org-habit-scheduled-repeat habit))))))
+	(if (nth 3 habit)
+	    (+ (org-habit-scheduled habit)
+	       (1- (org-habit-scheduled-repeat habit)))
+	  (org-habit-scheduled habit)))))
 (defsubst org-habit-deadline-repeat (habit)
   (or (nth 3 habit)
       (org-habit-scheduled-repeat habit)))
 (defsubst org-habit-done-dates (habit)
   (nth 4 habit))
+(defsubst org-habit-repeat-type (habit)
+  (nth 5 habit))
 
 (defsubst org-habit-get-priority (habit &optional moment)
   "Determine the relative priority of a habit.
 This must take into account not just urgency, but consistency as well."
   (let ((pri 1000)
-	(now (time-to-days
-	      (or moment
-		  (time-subtract (current-time)
-				 (list 0 (* 3600 org-extend-today-until) 0)))))
+	(now (if moment (time-to-days moment) (org-today)))
 	(scheduled (org-habit-scheduled habit))
 	(deadline (org-habit-deadline habit)))
     ;; add 10 for every day past the scheduled date, and subtract for every
@@ -228,7 +286,6 @@ Habits are assigned colors on the following basis:
 	    schedule's repeat period."
   (let* ((scheduled (or scheduled-days (org-habit-scheduled habit)))
 	 (s-repeat (org-habit-scheduled-repeat habit))
-	 (scheduled-end (+ scheduled (1- s-repeat)))
 	 (d-repeat (org-habit-deadline-repeat habit))
 	 (deadline (if scheduled-days
 		       (+ scheduled-days (- d-repeat s-repeat))
@@ -243,21 +300,23 @@ Habits are assigned colors on the following basis:
       (if donep
 	  '(org-habit-ready-face . org-habit-ready-future-face)
 	'(org-habit-alert-face . org-habit-alert-future-face)))
-     (t
-      '(org-habit-overdue-face . org-habit-overdue-future-face)))))
+     ((and org-habit-show-done-always-green donep)
+      '(org-habit-ready-face . org-habit-ready-future-face))
+     (t '(org-habit-overdue-face . org-habit-overdue-future-face)))))
 
 (defun org-habit-build-graph (habit starting current ending)
   "Build a graph for the given HABIT, from STARTING to ENDING.
 CURRENT gives the current time between STARTING and ENDING, for
 the purpose of drawing the graph.  It need not be the actual
 current time."
-  (let* ((done-dates (sort (org-habit-done-dates habit) '<))
+  (let* ((all-done-dates (sort (org-habit-done-dates habit) #'<))
+	 (done-dates all-done-dates)
 	 (scheduled (org-habit-scheduled habit))
 	 (s-repeat (org-habit-scheduled-repeat habit))
 	 (start (time-to-days starting))
 	 (now (time-to-days current))
 	 (end (time-to-days ending))
-	 (graph (make-string (1+ (- end start)) ?\ ))
+	 (graph (make-string (1+ (- end start)) ?\s))
 	 (index 0)
 	 last-done-date)
     (while (and done-dates (< (car done-dates) start))
@@ -266,29 +325,73 @@ current time."
     (while (< start end)
       (let* ((in-the-past-p (< start now))
 	     (todayp (= start now))
-	     (donep (and done-dates
-			 (= start (car done-dates))))
-	     (faces (if (and in-the-past-p
-			     (not last-done-date)
-			     (not (< scheduled now)))
-			'(org-habit-clear-face . org-habit-clear-future-face)
-		      (org-habit-get-faces
-		       habit start (and in-the-past-p
-					(if last-done-date
-					    (+ last-done-date s-repeat)
-					  scheduled))
-		       donep)))
+	     (donep (and done-dates (= start (car done-dates))))
+	     (faces
+	      (if (and in-the-past-p
+		       (not last-done-date)
+		       (not (< scheduled now)))
+		  '(org-habit-clear-face . org-habit-clear-future-face)
+		(org-habit-get-faces
+		 habit start
+		 (and in-the-past-p
+		      last-done-date
+		      ;; Compute scheduled time for habit at the time
+		      ;; START was current.
+		      (let ((type (org-habit-repeat-type habit)))
+			(cond
+			 ;; At the last done date, use current
+			 ;; scheduling in all cases.
+			 ((null done-dates) scheduled)
+			 ((equal type ".+") (+ last-done-date s-repeat))
+			 ((equal type "+")
+			  ;; Since LAST-DONE-DATE, each done mark
+			  ;; shifted scheduled date by S-REPEAT.
+			  (- scheduled (* (length done-dates) s-repeat)))
+			 (t
+			  ;; Compute the scheduled time after the
+			  ;; first repeat.  This is the closest time
+			  ;; past FIRST-DONE which can reach SCHEDULED
+			  ;; by a number of S-REPEAT hops.
+			  ;;
+			  ;; Then, play TODO state change history from
+			  ;; the beginning in order to find current
+			  ;; scheduled time.
+			  (let* ((first-done (car all-done-dates))
+				 (s (let ((shift (mod (- scheduled first-done)
+						      s-repeat)))
+				      (+ (if (= shift 0) s-repeat shift)
+					 first-done))))
+			    (if (= first-done last-done-date) s
+			      (catch :exit
+				(dolist (done (cdr all-done-dates) s)
+				  ;; Each repeat shifts S by any
+				  ;; number of S-REPEAT hops it takes
+				  ;; to get past DONE, with a minimum
+				  ;; of one hop.
+				  (incf s
+					(* (1+ (/ (max (- done s) 0) s-repeat))
+					   s-repeat))
+				  (when (= done last-done-date)
+				    (throw :exit s))))))))))
+		 donep)))
 	     markedp face)
 	(if donep
-	    (progn
-	      (aset graph index ?*)
+	    (let ((done-time (time-add
+			      starting
+			      (days-to-time
+			       (- start (time-to-days starting))))))
+
+	      (aset graph index org-habit-completed-glyph)
 	      (setq markedp t)
+	      (put-text-property
+	       index (1+ index) 'help-echo
+	       (format-time-string (org-time-stamp-format) done-time) graph)
 	      (while (and done-dates
 			  (= start (car done-dates)))
 		(setq last-done-date (car done-dates)
 		      done-dates (cdr done-dates))))
 	  (if todayp
-	      (aset graph index ?!)))
+	      (aset graph index org-habit-today-glyph)))
 	(setq face (if (or in-the-past-p todayp)
 		       (car faces)
 		     (cdr faces)))
@@ -303,7 +406,7 @@ current time."
 
 (defun org-habit-insert-consistency-graphs (&optional line)
   "Insert consistency graph for any habitual tasks."
-  (let ((inhibit-read-only t) l c
+  (let ((inhibit-read-only t)
 	(buffer-invisibility-spec '(org-link))
 	(moment (time-subtract (current-time)
 			       (list 0 (* 3600 org-extend-today-until) 0))))
@@ -316,13 +419,12 @@ current time."
 	    (delete-char (min (+ 1 org-habit-preceding-days
 				 org-habit-following-days)
 			      (- (line-end-position) (point))))
-	    (insert (org-habit-build-graph
-		     habit
-		     (time-subtract moment
-				    (days-to-time org-habit-preceding-days))
-		     moment
-		     (time-add moment
-			       (days-to-time org-habit-following-days))))))
+	    (insert-before-markers
+	     (org-habit-build-graph
+	      habit
+	      (time-subtract moment (days-to-time org-habit-preceding-days))
+	      moment
+	      (time-add moment (days-to-time org-habit-following-days))))))
 	(forward-line)))))
 
 (defun org-habit-toggle-habits ()
@@ -338,7 +440,5 @@ current time."
 (org-defkey org-agenda-mode-map "K" 'org-habit-toggle-habits)
 
 (provide 'org-habit)
-
-;; arch-tag: 64e070d9-bd09-4917-bd44-44465f5ed348
 
 ;;; org-habit.el ends here

@@ -1,10 +1,9 @@
-;;; org-attach.el --- Manage file attachments to org-mode tasks
+;;; org-attach.el --- Manage file attachments to Org tasks -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@newartisans.com>
 ;; Keywords: org data task
-;; Version: 6.35trans
 
 ;; This file is part of GNU Emacs.
 ;;
@@ -42,6 +41,7 @@
   (require 'cl))
 (require 'org-id)
 (require 'org)
+(require 'vc-git)
 
 (defgroup org-attach nil
   "Options concerning entry attachments in Org-mode."
@@ -54,6 +54,23 @@ If this is a relative path, it will be interpreted relative to the directory
 where the Org file lives."
   :group 'org-attach
   :type 'directory)
+
+(defcustom org-attach-commit t
+  "If non-nil commit attachments with git.
+This is only done if the Org file is in a git repository."
+  :group 'org-attach
+  :type 'boolean
+  :version "25.1"
+  :package-version '(Org . "9.0"))
+
+(defcustom org-attach-git-annex-cutoff (* 32 1024)
+  "If non-nil, files larger than this will be annexed instead of stored."
+  :group 'org-attach
+  :version "24.4"
+  :package-version '(Org . "8.0")
+  :type '(choice
+	  (const :tag "None" nil)
+	  (integer :tag "Bytes")))
 
 (defcustom org-attach-auto-tag "ATTACH"
   "Tag that will be triggered automatically when an entry has an attachment."
@@ -79,12 +96,15 @@ Allowed values are:
 mv    rename the file to move it into the attachment directory
 cp    copy the file
 ln    create a hard link.  Note that this is not supported
+      on all systems, and then the result is not defined.
+lns   create a symbol link.  Note that this is not supported
       on all systems, and then the result is not defined."
   :group 'org-attach
   :type '(choice
 	  (const :tag "Copy" cp)
 	  (const :tag "Move/Rename" mv)
-	  (const :tag "Link" ln)))
+	  (const :tag "Hard Link" ln)
+	  (const :tag "Symbol Link" lns)))
 
 (defcustom org-attach-expert nil
   "Non-nil means do not show the splash buffer with the attach dispatcher."
@@ -96,9 +116,39 @@ ln    create a hard link.  Note that this is not supported
   :group 'org-attach
   :type 'boolean)
 
-
 (defvar org-attach-inherited nil
   "Indicates if the last access to the attachment directory was inherited.")
+
+(defcustom org-attach-store-link-p nil
+  "Non-nil means store a link to a file when attaching it."
+  :group 'org-attach
+  :version "24.1"
+  :type '(choice
+	  (const :tag "Don't store link" nil)
+	  (const :tag "Link to origin location" t)
+	  (const :tag "Link to the attach-dir location" attached)))
+
+(defcustom org-attach-archive-delete nil
+  "Non-nil means attachments are deleted upon archiving a subtree.
+When set to `query', ask the user instead."
+  :group 'org-attach
+  :version "25.1"
+  :package-version '(Org . "8.3")
+  :type '(choice
+	  (const :tag "Never delete attachments" nil)
+	  (const :tag "Always delete attachments" t)
+	  (const :tag "Query the user" query)))
+
+(defcustom org-attach-annex-auto-get 'ask
+  "Confirmation preference for automatically getting annex files.
+If \\='ask, prompt using `y-or-n-p'.  If t, always get.  If nil, never get."
+  :group 'org-attach
+  :package-version '(Org . "9")
+  :version "25.1"
+  :type '(choice
+	  (const :tag "confirm with `y-or-n-p'" ask)
+	  (const :tag "always get from annex if necessary" t)
+	  (const :tag "never get from annex" nil)))
 
 ;;;###autoload
 (defun org-attach ()
@@ -123,7 +173,7 @@ Shows a list of commands and prompts for another key to execute a command."
 	      (princ "Select an Attachment Command:
 
 a       Select a file and attach it to the task, using `org-attach-method'.
-c/m/l   Attach a file using copy/move/link method.
+c/m/l/y Attach a file using copy/move/link/symbolic-link method.
 n       Create a new attachment, as an Emacs buffer.
 z       Synchronize the current task with its attachment
         directory, in case you added attachments yourself.
@@ -151,6 +201,8 @@ i       Make children of the current entry inherit its attachment directory.")))
 	(let ((org-attach-method 'mv)) (call-interactively 'org-attach-attach)))
        ((memq c '(?l ?\C-l))
 	(let ((org-attach-method 'ln)) (call-interactively 'org-attach-attach)))
+       ((memq c '(?y ?\C-y))
+	(let ((org-attach-method 'lns)) (call-interactively 'org-attach-attach)))
        ((memq c '(?n ?\C-n)) (call-interactively 'org-attach-new))
        ((memq c '(?z ?\C-z)) (call-interactively 'org-attach-sync))
        ((memq c '(?o ?\C-o)) (call-interactively 'org-attach-open))
@@ -175,23 +227,23 @@ using the entry ID will be invoked to access the unique directory for the
 current entry.
 If the directory does not exist and CREATE-IF-NOT-EXISTS-P is non-nil,
 the directory and (if necessary) the corresponding ID will be created."
-  (let (attach-dir uuid inherit)
+  (let (attach-dir uuid)
     (setq org-attach-inherited (org-entry-get nil "ATTACH_DIR_INHERIT"))
     (cond
      ((setq attach-dir (org-entry-get nil "ATTACH_DIR"))
       (org-attach-check-absolute-path attach-dir))
      ((and org-attach-allow-inheritance
-	   (setq inherit (org-entry-get nil "ATTACH_DIR_INHERIT" t)))
+	   (org-entry-get nil "ATTACH_DIR_INHERIT" t))
       (setq attach-dir
-	    (save-excursion
-	      (save-restriction
-		(widen)
-		(goto-char org-entry-property-inherited-from)
-		(let (org-attach-allow-inheritance)
-		  (org-attach-dir create-if-not-exists-p)))))
+	    (org-with-wide-buffer
+	     (if (marker-position org-entry-property-inherited-from)
+		 (goto-char org-entry-property-inherited-from)
+	       (org-back-to-heading t))
+	     (let (org-attach-allow-inheritance)
+	       (org-attach-dir create-if-not-exists-p))))
       (org-attach-check-absolute-path attach-dir)
       (setq org-attach-inherited t))
-     (t ; use the ID
+     (t					; use the ID
       (org-attach-check-absolute-path nil)
       (setq uuid (org-id-get (point) create-if-not-exists-p))
       (when (or uuid create-if-not-exists-p)
@@ -237,21 +289,60 @@ the ATTACH_DIR property) their own attachment directory."
   (org-entry-put nil "ATTACH_DIR_INHERIT" "t")
   (message "Children will inherit attachment directory"))
 
+(defun org-attach-use-annex ()
+  "Return non-nil if git annex can be used."
+  (let ((git-dir (vc-git-root (expand-file-name org-attach-directory))))
+    (and org-attach-git-annex-cutoff
+         (or (file-exists-p (expand-file-name "annex" git-dir))
+             (file-exists-p (expand-file-name ".git/annex" git-dir))))))
+
+(defun org-attach-annex-get-maybe (path)
+  "Call git annex get PATH (via shell) if using git annex.
+Signals an error if the file content is not available and it was not retrieved."
+  (when (and (org-attach-use-annex)
+	     (not
+	      (string-equal
+	       "found"
+	       (shell-command-to-string
+		(format "git annex find --format=found --in=here %s"
+			(shell-quote-argument path))))))
+    (let ((should-get
+	   (if (eq org-attach-annex-auto-get 'ask)
+	       (y-or-n-p (format "Run git annex get %s? " path))
+	     org-attach-annex-auto-get)))
+      (if should-get
+	  (progn (message "Running git annex get \"%s\"." path)
+		 (call-process "git" nil nil nil "annex" "get" path))
+	(error "File %s stored in git annex but it is not available, and was not retrieved"
+	       path)))))
+
 (defun org-attach-commit ()
   "Commit changes to git if `org-attach-directory' is properly initialized.
 This checks for the existence of a \".git\" directory in that directory."
-  (let ((dir (expand-file-name org-attach-directory)))
-    (when (file-exists-p (expand-file-name ".git" dir))
+  (let* ((dir (expand-file-name org-attach-directory))
+	 (git-dir (vc-git-root dir))
+	 (use-annex (org-attach-use-annex))
+	 (changes 0))
+    (when (and git-dir (executable-find "git"))
       (with-temp-buffer
 	(cd dir)
-	(shell-command "git add .")
-	(shell-command "git ls-files --deleted" t)
-	(mapc '(lambda (file)
-		 (unless (string= file "")
-		   (shell-command
-		    (concat "git rm \"" file "\""))))
-	      (split-string (buffer-string) "\n"))
-	(shell-command "git commit -m 'Synchronized attachments'")))))
+        (dolist (new-or-modified
+                 (split-string
+                  (shell-command-to-string
+                   "git ls-files -zmo --exclude-standard") "\0" t))
+          (if (and use-annex
+                   (>= (nth 7 (file-attributes new-or-modified))
+                       org-attach-git-annex-cutoff))
+              (call-process "git" nil nil nil "annex" "add" new-or-modified)
+            (call-process "git" nil nil nil "add" new-or-modified))
+	    (incf changes))
+	(dolist (deleted
+		 (split-string
+		  (shell-command-to-string "git ls-files -z --deleted") "\0" t))
+	  (call-process "git" nil nil nil "rm" deleted)
+	  (incf changes))
+	(when (> changes 0)
+	  (shell-command "git commit -m 'Synchronized attachments'"))))))
 
 (defun org-attach-tag (&optional off)
   "Turn the autotag on or (if OFF is set) off."
@@ -264,10 +355,19 @@ This checks for the existence of a \".git\" directory in that directory."
   "Turn the autotag off."
   (org-attach-tag 'off))
 
+(defun org-attach-store-link (file)
+  "Add a link to `org-stored-link' when attaching a file.
+Only do this when `org-attach-store-link-p' is non-nil."
+  (setq org-stored-links
+	(cons (list (org-attach-expand-link file)
+		    (file-name-nondirectory file))
+	      org-stored-links)))
+
 (defun org-attach-attach (file &optional visit-dir method)
   "Move/copy/link FILE into the attachment directory of the current task.
 If VISIT-DIR is non-nil, visit the directory with dired.
-METHOD may be `cp', `mv', or `ln', default taken from `org-attach-method'."
+METHOD may be `cp', `mv', `ln', or `lns' default taken from
+`org-attach-method'."
   (interactive "fFile to keep as an attachment: \nP")
   (setq method (or method org-attach-method))
   (let ((basename (file-name-nondirectory file)))
@@ -279,9 +379,15 @@ METHOD may be `cp', `mv', or `ln', default taken from `org-attach-method'."
       (cond
        ((eq method 'mv)	(rename-file file fname))
        ((eq method 'cp)	(copy-file file fname))
-       ((eq method 'ln) (add-name-to-file file fname)))
-      (org-attach-commit)
+       ((eq method 'ln) (add-name-to-file file fname))
+       ((eq method 'lns) (make-symbolic-link file fname)))
+      (when org-attach-commit
+	(org-attach-commit))
       (org-attach-tag)
+      (cond ((eq org-attach-store-link-p 'attached)
+	     (org-attach-store-link fname))
+	    ((eq org-attach-store-link-p t)
+	     (org-attach-store-link file)))
       (if visit-dir
 	  (dired attach-dir)
 	(message "File \"%s\" is now a task attachment." basename)))))
@@ -300,6 +406,13 @@ Beware that this does not work on systems that do not support hard links.
 On some systems, this apparently does copy the file instead."
   (interactive)
   (let ((org-attach-method 'ln)) (call-interactively 'org-attach-attach)))
+(defun org-attach-attach-lns ()
+  "Attach a file by creating a symbolic link to it.
+
+Beware that this does not work on systems that do not support symbolic links.
+On some systems, this apparently does copy the file instead."
+  (interactive)
+  (let ((org-attach-method 'lns)) (call-interactively 'org-attach-attach)))
 
 (defun org-attach-new (file)
   "Create a new attachment FILE for the current task.
@@ -319,7 +432,7 @@ The attachment is created as an Emacs buffer."
   (let* ((attach-dir (org-attach-dir t))
 	 (files (org-attach-file-list attach-dir))
 	 (file (or file
-		   (org-icompleting-read
+		   (completing-read
 		    "Delete attachment: "
 		    (mapcar (lambda (f)
 			      (list (file-name-nondirectory f)))
@@ -360,26 +473,26 @@ This can be used after files have been added externally."
 	(and files (org-attach-tag))
 	(when org-attach-file-list-property
 	  (dolist (file files)
-	    (unless (string-match "^\\." file)
+	    (unless (string-match "^\\.\\.?\\'" file)
 	      (org-entry-add-to-multivalued-property
 	       (point) org-attach-file-list-property file))))))))
 
 (defun org-attach-file-list (dir)
   "Return a list of files in the attachment directory.
-This ignores files starting with a \".\", and files ending in \"~\"."
+This ignores files ending in \"~\"."
   (delq nil
-	(mapcar (lambda (x) (if (string-match "^\\." x) nil x))
+	(mapcar (lambda (x) (if (string-match "^\\.\\.?\\'" x) nil x))
 		(directory-files dir nil "[^~]\\'"))))
 
 (defun org-attach-reveal (&optional if-exists)
-  "Show the attachment directory of the current task in dired."
+  "Show the attachment directory of the current task.
+This will attempt to use an external program to show the directory."
   (interactive "P")
   (let ((attach-dir (org-attach-dir (not if-exists))))
     (and attach-dir (org-open-file attach-dir))))
 
 (defun org-attach-reveal-in-emacs ()
-  "Show the attachment directory of the current task.
-This will attempt to use an external program to show the directory."
+  "Show the attachment directory of the current task in dired."
   (interactive)
   (let ((attach-dir (org-attach-dir t)))
     (dired attach-dir)))
@@ -395,9 +508,11 @@ If IN-EMACS is non-nil, force opening in Emacs."
 	 (files (org-attach-file-list attach-dir))
 	 (file (if (= (length files) 1)
 		   (car files)
-		 (org-icompleting-read "Open attachment: "
-				  (mapcar 'list files) nil t))))
-    (org-open-file (expand-file-name file attach-dir) in-emacs)))
+		 (completing-read "Open attachment: "
+				  (mapcar #'list files) nil t)))
+         (path (expand-file-name file attach-dir)))
+    (org-attach-annex-get-maybe path)
+    (org-open-file path in-emacs)))
 
 (defun org-attach-open-in-emacs ()
   "Open attachment, force opening in Emacs.
@@ -416,7 +531,21 @@ Basically, this adds the path to the attachment directory, and a \"file:\"
 prefix."
   (concat "file:" (org-attach-expand file)))
 
+(defun org-attach-archive-delete-maybe ()
+  "Maybe delete subtree attachments when archiving.
+This function is called by `org-archive-hook'.  The option
+`org-attach-archive-delete' controls its behavior."
+  (when (if (eq org-attach-archive-delete 'query)
+	    (yes-or-no-p "Delete all attachments? ")
+	  org-attach-archive-delete)
+    (org-attach-delete-all t)))
+
+(add-hook 'org-archive-hook 'org-attach-archive-delete-maybe)
+
 (provide 'org-attach)
 
-;; arch-tag: fce93c2e-fe07-4fa3-a905-e10dcc7a6248
+;; Local variables:
+;; generated-autoload-file: "org-loaddefs.el"
+;; End:
+
 ;;; org-attach.el ends here

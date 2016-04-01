@@ -1,12 +1,10 @@
 ;;; org-info.el --- Support for links to Info nodes from within Org-Mode
 
-;; Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-;;   Free Software Foundation, Inc.
+;; Copyright (C) 2004-2016 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <carsten at orgmode dot org>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; Homepage: http://orgmode.org
-;; Version: 6.35trans
 ;;
 ;; This file is part of GNU Emacs.
 ;;
@@ -42,7 +40,7 @@
 (defvar Info-current-node)
 
 ;; Install the link type
-(org-add-link-type "info" 'org-info-open)
+(org-add-link-type "info" 'org-info-open 'org-info-export)
 (add-hook 'org-store-link-functions 'org-info-store-link)
 
 ;; Implementation
@@ -50,11 +48,11 @@
   "Store a link to an Info file and node."
   (when (eq major-mode 'Info-mode)
     (let (link desc)
-      (setq link (org-make-link "info:"
-				(file-name-nondirectory Info-current-file)
-				":" Info-current-node))
+      (setq link (concat "info:"
+			 (file-name-nondirectory Info-current-file)
+			 "#" Info-current-node))
       (setq desc (concat (file-name-nondirectory Info-current-file)
-			 ":" Info-current-node))
+			 "#" Info-current-node))
       (org-store-link-props :type "info" :file Info-current-file
 			    :node Info-current-node
 			    :link link :desc desc)
@@ -67,17 +65,66 @@
 
 (defun org-info-follow-link (name)
   "Follow an Info file and node link specified by NAME."
-  (if (or (string-match "\\(.*\\)::?\\(.*\\)" name)
+  (if (or (string-match "\\(.*\\)[#:]:?\\(.*\\)" name)
           (string-match "\\(.*\\)" name))
-      (progn
+      (let ((filename (match-string 1 name))
+	    (nodename-or-index (or (match-string 2 name) "Top")))
 	(require 'info)
-        (if (match-string 2 name) ; If there isn't a node, choose "Top"
-            (Info-find-node (match-string 1 name) (match-string 2 name))
-          (Info-find-node (match-string 1 name) "Top")))
-    (message "Could not open: %s" name)))
+	;; If nodename-or-index is invalid node name, then look it up
+	;; in the index.
+	(condition-case nil
+	    (Info-find-node filename nodename-or-index)
+	  (user-error (Info-find-node filename "Top")
+		      (condition-case nil
+			  (Info-index nodename-or-index)
+			(user-error "Could not find '%s' node or index entry"
+				    nodename-or-index)))))
+    (user-error "Could not open: %s" name)))
+
+(defconst org-info-emacs-documents
+  '("ada-mode" "auth" "autotype" "bovine" "calc" "ccmode" "cl" "dbus" "dired-x"
+    "ebrowse" "ede" "ediff" "edt" "efaq-w32" "efaq" "eieio" "eintr" "elisp"
+    "emacs-gnutls" "emacs-mime" "emacs" "epa" "erc" "ert" "eshell" "eudc" "eww"
+    "flymake" "forms" "gnus" "htmlfontify" "idlwave" "ido" "info" "mairix-el"
+    "message" "mh-e" "newsticker" "nxml-mode" "octave-mode" "org" "pcl-cvs"
+    "pgg" "rcirc" "reftex" "remember" "sasl" "sc" "semantic" "ses" "sieve"
+    "smtpmail" "speedbar" "srecode" "todo-mode" "tramp" "url" "vip" "viper"
+    "widget" "wisent" "woman")
+  "List of emacs documents available.
+Taken from <http://www.gnu.org/software/emacs/manual/html_mono/.>")
+
+(defconst org-info-other-documents
+  '(("libc" . "http://www.gnu.org/software/libc/manual/html_mono/libc.html")
+    ("make" . "http://www.gnu.org/software/make/manual/make.html"))
+  "Alist of documents generated from texinfo source.
+
+When converting info links to html, links to any one of these manuals are
+converted to use these URL's.")
+
+(defun org-info-map-html-url (filename)
+  "Given info FILENAME, either return it (plus '.html' suffix added) or convert
+it to URL pointing to the official page on internet, e.g., use gnu.org for all
+emacs related documents. See `org-info-official-gnu-document' and
+`org-info-other-documents' for details."
+  (if (member filename org-info-emacs-documents)
+      (format "http://www.gnu.org/software/emacs/manual/html_mono/%s.html"
+              filename)
+    (let ((url (cdr (assoc filename org-info-other-documents))))
+      (or url (concat filename ".html")))))
+
+(defun org-info-export (path desc format)
+  "Export an info link.
+See `org-add-link-type' for details about PATH, DESC and FORMAT."
+  (when (eq format 'html)
+    (or (string-match "\\(.*\\)[#:]:?\\(.*\\)" path)
+	(string-match "\\(.*\\)" path))
+    (let ((filename (match-string 1 path))
+	  (node (or (match-string 2 path) "Top")))
+      (format "<a href=\"%s#%s\">%s</a>"
+	      (org-info-map-html-url filename)
+	      (replace-regexp-in-string " " "-" node)
+	      (or desc path)))))
 
 (provide 'org-info)
-
-;; arch-tag: 1e289f54-7176-487f-b575-dd4854bab15e
 
 ;;; org-info.el ends here

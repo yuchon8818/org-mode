@@ -8,31 +8,46 @@
 *.bak
 *.cp
 *.cps
+*.diff
 *.dvi
 *.elc
 *.fn
 *.fns
 *.html
+*.info
 *.ky
 *.kys
 *.log
+*.patch
 *.pdf
 *.pg
 *.pgs
+*.ps
 *.toc
 *.tp
 *.vr
 *.vrs
-*.dvi
-*.ps
 orgcard_letter.tex
+orgcard.txt
 org
-org-install.el
-org-*.tar.gz
+org-loaddefs.el
+org-version.el
+doc/org-version.inc
+org-*.tar*
+orgplus-*.tar*
 org-*.zip
+version.mk
 manual
 org_dual_license.texi
 ORGWEBPAGE/Changes.txt
+local*.mk
+.gitattributes
+mk/x11idle
+ChangeLog
+
+# texi2pdf --tidy
+
+doc/*.t2d
 
 # aspell word and replacement lists
 
@@ -42,6 +57,7 @@ ORGWEBPAGE/Changes.txt
 # allow tmp and test directories that will not be tracked
 
 test
+t
 auto
 tmp
 TODO
@@ -55,7 +71,4 @@ TODO
 
 #
 # Local variables:
-# fill-column: 72
-# mode: conf
 # End:
-/UTILITIES/x11idle
